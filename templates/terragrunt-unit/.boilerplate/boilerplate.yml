@@ -1,0 +1,26 @@
+# ---------------------------------------------------------------------------------------------------------------------
+# The house-style scaffold template, used by every module that does NOT ship its own
+# .boilerplate/ directory.
+#
+# Wired up by `default_template` in root.hcl. Terragrunt's template resolution order is:
+#   1. a template passed as the second argument to `terragrunt scaffold`
+#   2. the module's own .boilerplate/ directory
+#   3. catalog.default_template   <-- this file
+#   4. Terragrunt's built-in template
+# ---------------------------------------------------------------------------------------------------------------------
+variables:
+  - name: TeamName
+    description: Team that owns this unit. Used for the Owner tag.
+    type: string
+    default: unassigned
+    order: 1
+
+  - name: EnableRootInclude
+    description: Whether to include the root Terragrunt configuration.
+    type: bool
+    default: true
+
+  - name: RootFileName
+    description: Name of the root Terragrunt configuration file.
+    type: string
+    default: root.hcl

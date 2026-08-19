@@ -1,0 +1,35 @@
+# ---------------------------------------------------------------------------------------------------------------------
+# Scaffold template for the app-service module.
+#
+# Terragrunt injects these variables into every template automatically:
+#   sourceUrl          - the module source, with ?ref= pinning when the source is a git repo
+#   requiredVariables  - every variable in variables.tf with no default
+#   optionalVariables  - every variable in variables.tf with a default
+# each variable carrying .Name, .Description, .Type, .DefaultValue, .DefaultValuePlaceholder
+# and .UserValue (whatever was typed into the interactive form or passed with --var).
+#
+# Anything declared below is prompted for on top of those. Note that EnableRootInclude and
+# RootFileName have to be declared explicitly here: a custom template does NOT inherit the
+# built-in template's variable declarations.
+# ---------------------------------------------------------------------------------------------------------------------
+variables:
+  - name: TeamName
+    description: Team that owns this service. Used for the Owner tag.
+    type: string
+    order: 1
+
+  - name: DependencyPath
+    description: Relative path to the network unit this service reads its VPC and subnets from.
+    type: string
+    default: "../network"
+    order: 2
+
+  - name: EnableRootInclude
+    description: Whether to include the root Terragrunt configuration.
+    type: bool
+    default: true
+
+  - name: RootFileName
+    description: Name of the root Terragrunt configuration file.
+    type: string
+    default: root.hcl
