@@ -1,0 +1,235 @@
+# Replays README.md's Acts in the Actions log: prints each Act's narrative (pulled straight
+# from README.md, so it can't drift out of sync) and runs its commands for real. Every module
+# is fake/local-only (random provider + terraform_data only), so this needs zero cloud
+# credentials and zero secrets.
+#
+# This is a viewing tool, not a build gate: workflow_dispatch only, never push/pull_request.
+#
+# NOT safe to "re-run failed jobs" - later steps depend on filesystem state built by earlier
+# steps (scaffolded directories, root.hcl mutated by Act 3). Re-run the whole job from a fresh
+# checkout instead.
+name: Demo Replay
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_applies:
+        description: "Run the actual applies/outputs (Act 5 + cleanup verification). Uncheck for a fast, apply-free dry run."
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: demo-replay-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  replay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install OpenTofu 1.12.6
+        uses: opentofu/setup-opentofu@v2.0.2
+        with:
+          tofu_version: "1.12.6"
+          tofu_wrapper: false
+
+      - name: Install Terragrunt 1.1.3
+        run: |
+          set -euo pipefail
+          curl -sSL --retry 3 -o terragrunt_linux_amd64 \
+            https://github.com/gruntwork-io/terragrunt/releases/download/v1.1.3/terragrunt_linux_amd64
+          echo "d5da6a66741f4ee752aa3b502b57e47fd6d5c178942861b2507f14f083e7606e  terragrunt_linux_amd64" | sha256sum -c -
+          chmod +x terragrunt_linux_amd64
+          sudo install terragrunt_linux_amd64 /usr/local/bin/terragrunt
+          rm terragrunt_linux_amd64
+
+      - name: Resolve engine (TG_TF_PATH)
+        run: echo "TG_TF_PATH=$(command -v tofu || command -v terraform)" >> "$GITHUB_ENV"
+
+      - name: make check
+        run: make check
+
+      - name: Intro
+        run: |
+          echo "::group::Intro"
+          .github/scripts/print-readme-section.sh --intro
+          echo "::endgroup::"
+
+      - name: Repo tour
+        run: |
+          echo "::group::What's in here"
+          .github/scripts/print-readme-section.sh "What's in here"
+          echo "::endgroup::"
+          echo "::group::make list (the non-interactive catalog view)"
+          make list
+          echo "::endgroup::"
+
+      - name: Act 0 — the problem
+        run: |
+          echo "::group::Act 0 — the problem"
+          .github/scripts/print-readme-section.sh "Act 0"
+          echo "--- modules/app-service/variables.tf ($(wc -l < modules/app-service/variables.tf | tr -d ' ') lines) ---"
+          cat modules/app-service/variables.tf
+          echo "::endgroup::"
+
+      - name: Act 1 — terragrunt catalog
+        run: |
+          set -euo pipefail
+          echo "::group::Act 1 — terragrunt catalog"
+          .github/scripts/print-readme-section.sh "Act 1"
+          echo ">>> terragrunt catalog is an interactive TUI and cannot be driven headlessly in CI."
+          echo ">>> Proving the same result via the non-interactive scaffold path instead (leaves required vars as # TODO, same as pressing ctrl+d in the form):"
+          REPO=$(git rev-parse --show-toplevel)
+          mkdir -p live/prod/network && cd live/prod/network
+          terragrunt scaffold "$REPO//modules/network" --non-interactive
+          cd "$REPO"
+          echo ">>> diff against the committed live/dev/network reference (source path + filled-in values only, as the README explains):"
+          diff live/prod/network/terragrunt.hcl live/dev/network/terragrunt.hcl || true
+          echo ">>> Any 'Failed to parse url' / 'Failed to find last release tag' WARN above is expected and harmless for a local catalog source."
+          echo "::endgroup::"
+
+      - name: Act 2 — terragrunt scaffold, without the TUI
+        run: |
+          set -euo pipefail
+          echo "::group::Act 2 — terragrunt scaffold, without the TUI"
+          .github/scripts/print-readme-section.sh "Act 2"
+          REPO=$(git rev-parse --show-toplevel)
+          mkdir -p live/prod/data && cd live/prod/data
+          terragrunt scaffold "$REPO//modules/data-store" --non-interactive
+          cd "$REPO"
+          echo ">>> generated live/prod/data/terragrunt.hcl (table_name/hash_key have no default, so they're left as TODO):"
+          cat live/prod/data/terragrunt.hcl
+          echo "::endgroup::"
+
+      - name: Act 3 — templates
+        run: |
+          set -euo pipefail
+          echo "::group::Act 3 — templates"
+          .github/scripts/print-readme-section.sh "Act 3"
+
+          echo ">>> Tier 2: modules/app-service brings its own .boilerplate/ template"
+          REPO=$(git rev-parse --show-toplevel)
+          mkdir -p live/prod/app && cd live/prod/app
+          terragrunt scaffold "$REPO//modules/app-service" --var=TeamName=platform --non-interactive
+          cd "$REPO"
+          cat live/prod/app/terragrunt.hcl
+
+          echo ">>> Tier 3: uncommenting catalog.default_template in root.hcl gives every template-less module house style"
+          sed -i.bak 's/^  # default_template/  default_template/' root.hcl && rm root.hcl.bak
+          rm -rf live/prod/network live/prod/data
+          mkdir -p live/prod/network && cd live/prod/network
+          terragrunt scaffold "$REPO//modules/network" --var=TeamName=networking --non-interactive
+          cd "$REPO"
+          echo ">>> live/prod/network/terragrunt.hcl now carries house style from one line in root.hcl:"
+          head -20 live/prod/network/terragrunt.hcl
+          echo "::endgroup::"
+
+      - name: Act 4 — scaffolding whole units
+        run: |
+          set -euo pipefail
+          echo "::group::Act 4 — scaffolding whole units, not just modules"
+          .github/scripts/print-readme-section.sh "Act 4"
+          REPO=$(git rev-parse --show-toplevel)
+          tmpdir=$(mktemp -d)
+          cd "$tmpdir"
+          terragrunt scaffold "$REPO//units/app-service" --non-interactive
+          echo ">>> generated terragrunt.values.hcl:"
+          cat terragrunt.values.hcl
+          cd "$REPO"
+          echo "::endgroup::"
+
+      - name: Act 5 — stacks (narrative)
+        run: |
+          echo "::group::Act 5 — stacks: one file, one environment"
+          .github/scripts/print-readme-section.sh "Act 5"
+          echo "::endgroup::"
+
+      - name: Act 5a — stacks (live/preview)
+        if: ${{ inputs.run_applies }}
+        run: |
+          set -euo pipefail
+          echo "::group::Act 5a — live/preview"
+          terragrunt stack generate --working-dir live/preview
+          find live/preview/.terragrunt-stack -type f -name '*.hcl'
+          # On a stack's very first apply, `stack run apply` doesn't strictly serialize units by
+          # their dependency graph, so `app` can race ahead of `network` and fail to resolve real
+          # outputs. A retry is safe/idempotent: `network` is a no-op the second time, and `app`
+          # can then resolve its dependency for real.
+          terragrunt stack run apply --working-dir live/preview --non-interactive \
+            || terragrunt stack run apply --working-dir live/preview --non-interactive
+          terragrunt stack output --working-dir live/preview
+          echo "::endgroup::"
+
+      - name: Act 5b — the punchline (live/preview-eu)
+        if: ${{ inputs.run_applies }}
+        run: |
+          set -euo pipefail
+          echo "::group::Act 5b — cp -r live/preview live/preview-eu, change two values"
+          cp -r live/preview live/preview-eu
+          rm -rf live/preview-eu/.terragrunt-stack
+          sed -i.bak \
+            -e 's/name       = "preview"/name       = "preview-eu"/' \
+            -e 's#cidr_block = "10.40.0.0/16"#cidr_block = "10.50.0.0/16"#' \
+            live/preview-eu/terragrunt.stack.hcl
+          rm live/preview-eu/terragrunt.stack.hcl.bak
+          diff live/preview/terragrunt.stack.hcl live/preview-eu/terragrunt.stack.hcl || true
+          # Retry: see the note on Act 5a's first apply - same first-apply race applies here.
+          terragrunt stack run apply --working-dir live/preview-eu --non-interactive \
+            || terragrunt stack run apply --working-dir live/preview-eu --non-interactive
+          echo "::endgroup::"
+
+      - name: Act 5c — scaffold a stack (live/qa)
+        if: ${{ inputs.run_applies }}
+        run: |
+          set -euo pipefail
+          echo "::group::Act 5c — terragrunt scaffold stacks/service-env into live/qa"
+          REPO=$(git rev-parse --show-toplevel)
+          mkdir -p live/qa && cd live/qa
+          terragrunt scaffold "$REPO//stacks/service-env" --non-interactive
+          sed -i.bak \
+            -e 's/cidr_block = "TODO"/cidr_block = "10.60.0.0\/16"/' \
+            -e 's/env_name   = "TODO"/env_name   = "qa"/' \
+            terragrunt.values.hcl
+          rm terragrunt.values.hcl.bak
+          cd "$REPO"
+          terragrunt stack generate --working-dir live/qa
+          # Retry: see the note on Act 5a's first apply - same first-apply race applies here.
+          terragrunt stack run apply --working-dir live/qa --non-interactive \
+            || terragrunt stack run apply --working-dir live/qa --non-interactive
+          echo "::endgroup::"
+
+      - name: Act 6 — how you'd really run this (documented only)
+        run: |
+          echo "::group::Act 6 — how you'd really run this"
+          .github/scripts/print-readme-section.sh "Act 6"
+          echo ">>> Not executed by this workflow: git tag + git push would mutate the real GitHub remote."
+          echo ">>> Act 6 is documented here exactly as the README frames it - read, not run."
+          echo "::endgroup::"
+
+      - name: Closing sections
+        run: |
+          for section in "What it actually saved" "Limitations, stated plainly" "Version notes" "Gotchas, collected"; do
+            echo "::group::$section"
+            .github/scripts/print-readme-section.sh "$section"
+            echo "::endgroup::"
+          done
+
+      - name: Cleanup verification — state survives stack clean
+        if: ${{ inputs.run_applies }}
+        run: |
+          set -euo pipefail
+          echo "::group::Proving state survives terragrunt stack clean"
+          terragrunt stack run apply --working-dir live/preview --non-interactive
+          terragrunt stack clean --working-dir live/preview
+          terragrunt stack generate --working-dir live/preview
+          terragrunt stack run plan --working-dir live/preview --non-interactive
+          echo "::endgroup::"
+
+      - name: make destroy
+        if: always()
+        run: make destroy

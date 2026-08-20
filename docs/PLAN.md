@@ -27,6 +27,16 @@
 >   `destroy`, or tearing down a stack whose dependency has already been destroyed fails.
 > - **No upgrade step was needed.** Terragrunt was already at 1.1.3 and OpenTofu 1.12.6 was
 >   installed by the time the build started.
+> - **A demo-replay workflow was added, reversing decision 7.** Decision 7 said "no CI
+>   workflow — local-only demo." A `.github/workflows/demo-replay.yml` was added later,
+>   triggered only by `workflow_dispatch`, that prints each Act's README narrative and
+>   runs its non-interactive-equivalent commands so the guide can be watched running in
+>   the Actions log instead of typed locally. It is a replay/viewing tool, not a build
+>   gate: it never triggers on push or pull_request, asserts nothing about code quality,
+>   and pushes nothing (`contents: read` only) — Act 6's `git tag`/`git push` is still
+>   printed but never executed. The original decision's premise — no CI *gate* on this
+>   local-only demo — still holds; "no CI" was just read too broadly to also rule out an
+>   opt-in replay tool.
 >
 > See the "Gotchas, collected" section of `README.md` for the full list.
 
